@@ -72,9 +72,9 @@ function isStaff(member) {
 function styledEmbed(title, description, color = 0x3498db) {
   return new EmbedBuilder()
     .setColor(color)
-    .setThumbnail(STORMY_LOGO)
     .setTitle(title)
     .setDescription(description)
+    .setImage(STORMY_LOGO)
     .setFooter({ text: 'Stormy | En03', iconURL: STORMY_LOGO })
     .setTimestamp();
 }
@@ -86,7 +86,7 @@ client.once(Events.ClientReady, async () => {
   // Role Request Panel
   const roleChannel = await client.channels.fetch(ROLE_REQUEST_CHANNEL).catch(() => null);
   if (roleChannel) {
-    const embed = styledEmbed('📋 Role Request', 'Click the **Apply** button below to submit your application to join the Stormy Family!', 0x3498db);
+    const embed = new EmbedBuilder().setColor(0x3498db).setTitle('📋 Role Request').setDescription('Click the **Apply** button below to submit your application to join the Stormy Family!').setImage(STORMY_LOGO).setFooter({ text: 'Stormy | En03', iconURL: STORMY_LOGO });
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('apply_form').setLabel('Apply').setStyle(ButtonStyle.Primary)
     );
@@ -96,7 +96,7 @@ client.once(Events.ClientReady, async () => {
   // Name Change Panel
   const nameChannel = await client.channels.fetch(NAME_CHANGE_CHANNEL).catch(() => null);
   if (nameChannel) {
-    const embed = styledEmbed('✏️ Request Name Change', 'Click the button below to request a nickname change.\n\nYour name will be set to: **Your Name | Your ID**', 0x9b59b6);
+    const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('✏️ Request Name Change').setDescription('Click the button below to request a nickname change.\n\nYour name will be set to: **Your Name | Your ID**').setImage(STORMY_LOGO).setFooter({ text: 'Stormy | En03', iconURL: STORMY_LOGO });
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('name_change_form').setLabel('✏️ Request Name Change').setStyle(ButtonStyle.Primary)
     );
@@ -219,7 +219,9 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // ── Name Change Form ──
     if (interaction.customId === 'name_change_form') {
-      // blacklisted users CAN request name change
+      if (blacklistedUsers.has(interaction.user.id)) {
+        return interaction.reply({ content: '🚫 You are **blacklisted** and cannot use this feature.', ephemeral: true });
+      }
       if (pendingNameChanges.has(interaction.user.id)) {
         return interaction.reply({ content: '⏳ You already have a **pending name change request**!', ephemeral: true });
       }
@@ -440,6 +442,7 @@ client.on(Events.InteractionCreate, async interaction => {
         .setThumbnail(interaction.user.displayAvatarURL())
         .setTitle('📋 𝗥𝗢𝗟𝗘 𝗥𝗘𝗤𝗨𝗘𝗦𝗧 𝗔𝗣𝗣𝗟𝗜𝗖𝗔𝗧𝗜𝗢𝗡')
         .setDescription(`**𝗜𝗚𝗡** - ${ign}\n**𝗜𝗗** - ${id}\n**𝗟𝗲𝘃𝗲𝗹** - ${level}\n**𝗟𝗮𝘀𝘁 𝗙𝗮𝗺𝗶𝗹𝘆** - ${family}`)
+        .setImage(STORMY_LOGO)
         .setFooter({ text: `Application by ${interaction.user.tag} • ${new Date().toUTCString()}`, iconURL: STORMY_LOGO })
         .setTimestamp();
 
