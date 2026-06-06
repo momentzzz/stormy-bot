@@ -61,7 +61,7 @@ const EXTRA_ROLES = [
 
 // ── STATE ─────────────────────────────────────────────────
 const pendingApplications = new Set();
-const blacklistedUsers    = new Map(); // userId -> displayName
+const blacklistedUsers    = new Map();
 const pendingNameChanges  = new Set();
 
 // ── HELPERS ───────────────────────────────────────────────
@@ -79,29 +79,60 @@ function styledEmbed(title, description, color = 0x3498db) {
     .setTimestamp();
 }
 
+// ── SEND PANEL ONLY IF NOT EXISTS ─────────────────────────
+async function ensurePanel(channelId, customId, embedBuilder, buttonBuilder) {
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel) return;
+
+  // fetch last 20 messages and check if panel already exists
+  const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+  if (messages) {
+    const existing = messages.find(m =>
+      m.author.id === client.user.id &&
+      m.components?.length > 0 &&
+      m.components[0]?.components?.[0]?.customId === customId
+    );
+    if (existing) return; // panel already exists, don't send again
+  }
+
+  const embed = embedBuilder();
+  const row   = buttonBuilder();
+  await channel.send({ embeds: [embed], components: [row] });
+}
+
 // ── BOT READY ─────────────────────────────────────────────
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ${client.user.tag} is online`);
 
-  // Role Request Panel
-  const roleChannel = await client.channels.fetch(ROLE_REQUEST_CHANNEL).catch(() => null);
-  if (roleChannel) {
-    const embed = new EmbedBuilder().setColor(0x3498db).setTitle('📋 Role Request').setDescription('Click the **Apply** button below to submit your application to join the Stormy Family!').setImage(STORMY_LOGO).setFooter({ text: 'Stormy | En03', iconURL: STORMY_LOGO });
-    const row = new ActionRowBuilder().addComponents(
+  // Role Request Panel — only send if not already there
+  await ensurePanel(
+    ROLE_REQUEST_CHANNEL,
+    'apply_form',
+    () => new EmbedBuilder()
+      .setColor(0x3498db)
+      .setTitle('📋 Role Request')
+      .setDescription('Click the **Apply** button below to submit your application to join the Stormy Family!')
+      .setImage(STORMY_LOGO)
+      .setFooter({ text: 'Stormy | En03', iconURL: STORMY_LOGO }),
+    () => new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('apply_form').setLabel('Apply').setStyle(ButtonStyle.Primary)
-    );
-    await roleChannel.send({ embeds: [embed], components: [row] });
-  }
+    )
+  );
 
-  // Name Change Panel
-  const nameChannel = await client.channels.fetch(NAME_CHANGE_CHANNEL).catch(() => null);
-  if (nameChannel) {
-    const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('✏️ Request Name Change').setDescription('Click the button below to request a nickname change.\n\nYour name will be set to: **Your Name | Your ID**').setImage(STORMY_LOGO).setFooter({ text: 'Stormy | En03', iconURL: STORMY_LOGO });
-    const row = new ActionRowBuilder().addComponents(
+  // Name Change Panel — only send if not already there
+  await ensurePanel(
+    NAME_CHANGE_CHANNEL,
+    'name_change_form',
+    () => new EmbedBuilder()
+      .setColor(0x9b59b6)
+      .setTitle('✏️ Request Name Change')
+      .setDescription('Click the button below to request a nickname change.\n\nYour name will be set to: **Your Name | Your ID**')
+      .setImage(STORMY_LOGO)
+      .setFooter({ text: 'Stormy | En03', iconURL: STORMY_LOGO }),
+    () => new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('name_change_form').setLabel('✏️ Request Name Change').setStyle(ButtonStyle.Primary)
-    );
-    await nameChannel.send({ embeds: [embed], components: [row] });
-  }
+    )
+  );
 });
 
 // ── MESSAGE COMMANDS ──────────────────────────────────────
@@ -109,9 +140,8 @@ client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
   if (!message.content.startsWith('/unblacklist')) return;
 
-  const member = message.member;
-  if (!isStaff(member)) {
-    return message.reply({ content: '❌ Staff only.', ephemeral: true });
+  if (!isStaff(message.member)) {
+    return message.reply('❌ Staff only.');
   }
 
   if (blacklistedUsers.size === 0) {
@@ -144,28 +174,20 @@ client.on(Events.InteractionCreate, async interaction => {
 
   if (interaction.isStringSelectMenu()) {
 
-    // ── Unblacklist Select ──
     if (interaction.customId === 'unblacklist_select') {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       const userId   = interaction.values[0];
       const userName = blacklistedUsers.get(userId) || `User ${userId}`;
-
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`confirm_unblacklist_${userId}`).setLabel('✅ Yes, Unblacklist').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('cancel_unblacklist').setLabel('❌ No, Cancel').setStyle(ButtonStyle.Secondary)
       );
-
-      await interaction.update({
-        content: `⚠️ Are you sure you want to **unblacklist** **${userName}**?`,
-        components: [row]
-      });
+      await interaction.update({ content: `⚠️ Are you sure you want to **unblacklist** **${userName}**?`, components: [row] });
       return;
     }
 
-    // ── Role Select ──
     if (interaction.customId.startsWith('select_roles_')) {
       const userId        = interaction.customId.split('_')[2];
       const member        = await interaction.guild.members.fetch(userId).catch(() => null);
@@ -185,7 +207,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (staffCh) {
         await staffCh.send({ embeds: [styledEmbed('➕ Extra Roles Added', `**Member:** <@${userId}>\n**Added By:** ${interaction.user}\n**Roles:**\n${roleNames}`, 0x3498db)] });
       }
-
       await interaction.update({ content: '✅ Roles added successfully.', components: [] });
       return;
     }
@@ -205,7 +226,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (pendingApplications.has(interaction.user.id)) {
         return interaction.reply({ content: '⏳ You already have a **pending application**! Please wait for staff to review it.', ephemeral: true });
       }
-
       const modal = new ModalBuilder().setCustomId('application_modal').setTitle('Role Request Application');
       modal.addComponents(
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ign').setLabel('In Game Name').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -225,7 +245,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (pendingNameChanges.has(interaction.user.id)) {
         return interaction.reply({ content: '⏳ You already have a **pending name change request**!', ephemeral: true });
       }
-
       const modal = new ModalBuilder().setCustomId('name_change_modal').setTitle('Name Change Request');
       modal.addComponents(
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel('Your New In-Game Name').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -240,21 +259,17 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       const userId   = interaction.customId.split('_')[2];
       const userName = blacklistedUsers.get(userId) || `User ${userId}`;
       blacklistedUsers.delete(userId);
-
       try {
         const member = await interaction.guild.members.fetch(userId).catch(() => null);
         if (member) await member.send(`✅ You have been **unblacklisted** from **Stormy Family**. You may now apply again!`).catch(() => {});
       } catch {}
-
       const staffCh = await client.channels.fetch(STAFF_CHANNEL).catch(() => null);
       if (staffCh) {
         await staffCh.send({ embeds: [styledEmbed('✅ Member Unblacklisted', `**Member:** <@${userId}>\n**Unblacklisted By:** ${interaction.user}`, 0x2ecc71)] });
       }
-
       await interaction.update({ content: `✅ **${userName}** has been unblacklisted by ${interaction.user.tag}`, components: [] });
       return;
     }
@@ -270,11 +285,9 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       try {
         const userId = interaction.customId.split('_')[1];
         const member = await interaction.guild.members.fetch(userId);
-
         await member.roles.add(FAMILY_ROLE_ID);
         pendingApplications.delete(userId);
 
@@ -283,7 +296,6 @@ client.on(Events.InteractionCreate, async interaction => {
         const ignMatch = desc.match(/\*\*𝗜𝗚𝗡\*\* - (.+)/);
         const idMatch  = desc.match(/\*\*𝗜𝗗\*\* - (.+)/);
         if (ignMatch && idMatch) nickname = `${ignMatch[1].trim()} | ${idMatch[1].trim()}`;
-
         try { await member.setNickname(nickname); } catch {}
 
         await member.send(`✅ Your role request application to **Stormy Family** has been **approved**!\n\n**Roles Provided:**\n• Family Member\n\n**Nickname set to:** ${nickname}`).catch(() => {});
@@ -297,12 +309,13 @@ client.on(Events.InteractionCreate, async interaction => {
           new ButtonBuilder().setCustomId(`more_roles_${userId}`).setLabel('Add More Roles').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`blacklist_${userId}`).setLabel('🚫 Blacklist').setStyle(ButtonStyle.Danger)
         );
-
-        await interaction.update({ content: `✅ Approved by ${interaction.user.tag}`, embeds: interaction.message.embeds, components: [row] });
+        // Edit the existing message — don't send new one
+        await interaction.message.edit({ content: `✅ Approved by ${interaction.user.tag}`, embeds: interaction.message.embeds, components: [row] });
+        await interaction.deferUpdate();
 
       } catch (err) {
         console.error(err);
-        if (!interaction.replied) await interaction.reply({ content: '❌ Failed to approve.', ephemeral: true });
+        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: '❌ Failed to approve.', ephemeral: true });
       }
       return;
     }
@@ -312,7 +325,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       const userId = interaction.customId.split('_')[1];
       const modal  = new ModalBuilder().setCustomId(`reject_modal_${userId}`).setTitle('Rejection Reason');
       modal.addComponents(
@@ -329,10 +341,8 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       const userId = interaction.customId.split('_')[1];
       let userName = `User ${userId}`;
-
       try {
         const member = await interaction.guild.members.fetch(userId).catch(() => null);
         if (member) {
@@ -340,16 +350,15 @@ client.on(Events.InteractionCreate, async interaction => {
           await member.send(`🚫 You have been **blacklisted** from applying to **Stormy Family**.\n\nIf you believe this is a mistake, please contact the leadership.`).catch(() => {});
         }
       } catch {}
-
       blacklistedUsers.set(userId, userName);
       pendingApplications.delete(userId);
-
       const staffCh = await client.channels.fetch(STAFF_CHANNEL).catch(() => null);
       if (staffCh) {
         await staffCh.send({ embeds: [styledEmbed('🚫 Member Blacklisted', `**Member:** <@${userId}>\n**Blacklisted By:** ${interaction.user}`, 0xe74c3c)] });
       }
-
-      await interaction.update({ content: `🚫 <@${userId}> has been blacklisted by ${interaction.user.tag}`, embeds: interaction.message.embeds, components: [] });
+      // Edit existing message — don't send new one
+      await interaction.message.edit({ content: `🚫 <@${userId}> has been blacklisted by ${interaction.user.tag}`, embeds: interaction.message.embeds, components: [] });
+      await interaction.deferUpdate();
       return;
     }
 
@@ -358,7 +367,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       const userId = interaction.customId.split('_')[2];
       const menu = new StringSelectMenuBuilder()
         .setCustomId(`select_roles_${userId}`)
@@ -366,7 +374,6 @@ client.on(Events.InteractionCreate, async interaction => {
         .setMinValues(1)
         .setMaxValues(EXTRA_ROLES.length)
         .addOptions(EXTRA_ROLES);
-
       await interaction.reply({ content: 'Select roles to provide:', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
       return;
     }
@@ -376,13 +383,12 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       try {
-        const parts    = interaction.customId.split('_');
-        const userId   = parts[2];
-        const newName  = decodeURIComponent(parts.slice(3).join('_'));
-        const member   = await interaction.guild.members.fetch(userId);
-        const oldName  = member.displayName;
+        const parts   = interaction.customId.split('_');
+        const userId  = parts[2];
+        const newName = decodeURIComponent(parts.slice(3).join('_'));
+        const member  = await interaction.guild.members.fetch(userId);
+        const oldName = member.displayName;
 
         await member.setNickname(newName);
         pendingNameChanges.delete(userId);
@@ -394,12 +400,17 @@ client.on(Events.InteractionCreate, async interaction => {
           await staffCh.send({ embeds: [styledEmbed('✏️ Name Change Approved', `**Member:** <@${userId}>\n**Approved By:** ${interaction.user}\n**Old Name:** ${oldName}\n**New Name:** ${newName}`, 0x2ecc71)] });
         }
 
-        await interaction.message.edit({ content: `✅ Name change approved by ${interaction.user.tag}\n**${oldName}** → **${newName}**`, embeds: [], components: [] });
+        // Edit the existing message — removes buttons, no new panel
+        await interaction.message.edit({
+          content: `✅ Name change approved by ${interaction.user.tag} — **${oldName}** → **${newName}**`,
+          embeds: [],
+          components: []
+        });
         await interaction.deferUpdate();
 
       } catch (err) {
         console.error(err);
-        if (!interaction.replied) await interaction.reply({ content: '❌ Failed to change name.', ephemeral: true });
+        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: '❌ Failed to change name.', ephemeral: true });
       }
       return;
     }
@@ -409,7 +420,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (!isStaff(interaction.member)) {
         return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
       }
-
       const userId = interaction.customId.split('_')[2];
       const modal  = new ModalBuilder().setCustomId(`reject_name_modal_${userId}`).setTitle('Rejection Reason');
       modal.addComponents(
@@ -457,7 +467,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (staffChannel) {
         await staffChannel.send({ content: `${pingMentions} — New application from <@${interaction.user.id}>!`, embeds: [embed], components: [buttons] });
       }
-
       await interaction.reply({ content: '✅ Your application has been submitted! Please wait for staff to review it.', ephemeral: true });
       return;
     }
@@ -480,12 +489,13 @@ client.on(Events.InteractionCreate, async interaction => {
         await staffCh.send({ embeds: [styledEmbed('❌ Application Rejected', `**Applicant:** <@${userId}>\n**Rejected By:** ${interaction.user}\n**Reason:** ${reason}`, 0xe74c3c)] });
       }
 
-      // update without reposting panel
-      await interaction.update({
+      // Edit existing message — no new panel
+      await interaction.message.edit({
         content: `❌ Rejected by ${interaction.user.tag} — Reason: ${reason}`,
         embeds: interaction.message.embeds,
         components: []
       });
+      await interaction.deferUpdate();
       return;
     }
 
@@ -499,9 +509,9 @@ client.on(Events.InteractionCreate, async interaction => {
 
       const embed = new EmbedBuilder()
         .setColor(0x9b59b6)
-        .setThumbnail(STORMY_LOGO)
         .setTitle('✏️ Name Change Request')
         .setDescription(`**Requested By:** <@${interaction.user.id}>\n**Current Name:** ${interaction.member.displayName}\n**Requested Name:** ${fullName}`)
+        .setImage(STORMY_LOGO)
         .setFooter({ text: `Request by ${interaction.user.tag}`, iconURL: STORMY_LOGO })
         .setTimestamp();
 
@@ -516,7 +526,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (staffChannel) {
         await staffChannel.send({ content: `${pingMentions} — Name change request from <@${interaction.user.id}>!`, embeds: [embed], components: [buttons] });
       }
-
       await interaction.reply({ content: '✅ Your name change request has been submitted! Please wait for staff to review it.', ephemeral: true });
       return;
     }
@@ -539,12 +548,13 @@ client.on(Events.InteractionCreate, async interaction => {
         await staffCh.send({ embeds: [styledEmbed('❌ Name Change Rejected', `**Member:** <@${userId}>\n**Rejected By:** ${interaction.user}\n**Reason:** ${reason}`, 0xe74c3c)] });
       }
 
-      // update without reposting panel
-      await interaction.update({
+      // Edit existing message — no new panel
+      await interaction.message.edit({
         content: `❌ Name change rejected by ${interaction.user.tag} — Reason: ${reason}`,
         embeds: interaction.message.embeds,
         components: []
       });
+      await interaction.deferUpdate();
       return;
     }
   }
